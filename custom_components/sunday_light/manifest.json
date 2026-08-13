@@ -1,0 +1,12 @@
+{
+  "domain": "sunday_light",
+  "name": "Sunday Light",
+  "codeowners": ["@natmart-in"],
+  "config_flow": true,
+  "documentation": "https://github.com/natmart-in/ha-sunday-light",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/natmart-in/ha-sunday-light/issues",
+  "requirements": ["pycognito==2024.5.1"],
+  "version": "0.1.0"
+}

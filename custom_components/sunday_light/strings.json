@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sign in to Sunday",
+        "description": "Use the same email and password as the Sunday app. Only a long-lived sign-in token is stored — never your password.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Sunday",
+        "description": "Your Sunday sign-in for {email} has expired. Enter your password to sign in again.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Could not reach the Sunday cloud",
+      "unknown": "Unexpected error — check the Home Assistant logs"
+    },
+    "abort": {
+      "already_configured": "This Sunday account is already configured",
+      "reauth_successful": "Re-authentication was successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sunday Light options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    }
+  }
+}
