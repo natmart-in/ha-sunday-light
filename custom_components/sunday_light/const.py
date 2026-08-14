@@ -15,7 +15,11 @@ COGNITO_USER_POOL_ID = "us-east-1_Mev3U8BbQ"
 COGNITO_CLIENT_ID = "3knfrpj7tjkffh35hsih18fqt4"
 COGNITO_IDP_URL = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/"
 
-# SL1 LED physical colour-temperature range (Kelvin).
+# SL1 LED physical colour-temperature range (Kelvin), matching the app.
+# Deliberately hard-coded for now: shadows from old firmware can report
+# values below 2650K that the LEDs cannot actually produce, so the device
+# is not a trustworthy source yet. If future lamps support a wider range,
+# firmware/API should expose it per-lamp and this becomes a per-device read.
 MIN_KELVIN = 2650
 MAX_KELVIN = 6000
 
