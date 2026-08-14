@@ -108,7 +108,11 @@ class SundayLightEntity(CoordinatorEntity[SundayCoordinator], LightEntity):
     @property
     def color_temp_kelvin(self) -> int | None:
         state = self._state
-        return state.color_temp_k if state else None
+        if state is None or state.color_temp_k is None:
+            return None
+        # Old firmware/API can report values outside the SL1's physical
+        # 2650-6000K range (e.g. 2039K); clamp for display like the app does.
+        return max(MIN_KELVIN, min(MAX_KELVIN, state.color_temp_k))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         brightness_api: float | None = None
