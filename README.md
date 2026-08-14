@@ -1,7 +1,11 @@
+<img src="custom_components/sunday_light/brand/icon.png" alt="Sunday" width="80" align="left">
+
 # Sunday Light for Home Assistant
 
- *This is a side project entirely vibe-coded and not officially supported by Sunday light.
- Please create any issues in Github.*
+[![Open your Home Assistant instance and add this repository to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=natmart-in&repository=ha-sunday-light&category=integration)
+
+*This is a side project entirely vibe-coded and not officially supported by Sunday light.
+Please create any issues in Github.*
 
 Control your [Sunday](https://sundaylight.cc) SL1 light from Home Assistant:
 on/off, brightness, colour temperature (2650–6000 K) and transitions, with
@@ -30,6 +34,8 @@ last wins, exactly as with the app today.
 ## Installation
 
 ### HACS (recommended)
+
+Click the badge above, or manually:
 
 1. In HACS, open the menu (⋮) → **Custom repositories**.
 2. Add `https://github.com/natmart-in/ha-sunday-light` with category
