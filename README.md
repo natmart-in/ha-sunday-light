@@ -8,8 +8,8 @@
   <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=natmart-in&repository=ha-sunday-light&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open your Home Assistant instance and add this repository to HACS"></a>
 </p>
 
-<p align="center"><em>This is a side project entirely vibe-coded and not officially supported by Sunday light.
-Please create any issues in Github.</em></p>
+<p align="center"><em>This is a side project largely vibe-coded and not officially supported by Sunday light.
+Please create any issues/PRs on the repo </em></p>
 
 Control your [Sunday](https://sundaylight.cc) SL1 light from Home Assistant:
 on/off, brightness, colour temperature (2650–6000 K) and transitions, with
