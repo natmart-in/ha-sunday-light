@@ -18,7 +18,7 @@ your Sunday rooms suggested as Home Assistant areas.
 ## How it works
 
 The integration talks to the Sunday cloud — the same API the Sunday app uses.
-There is no local control path on the SL1 today, so:
+There is no local control path on the SL1 today (we are working on adding this), so:
 
 - An internet connection is required for control.
 - State is polled (every 10 seconds by default, configurable). Changes made
