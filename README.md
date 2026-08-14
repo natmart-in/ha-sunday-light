@@ -1,8 +1,6 @@
 # Sunday Light for Home Assistant
 
-> **Beta.** This is a side project by Sunday's founder, not an official
-> supported Sunday product. It works, but expect rough edges — please report
-> issues on this repo rather than to Sunday support.
+**Beta.** This is a side project entirely vibe-coded and not officially supported by Sunday light 
 
 Control your [Sunday](https://sundaylight.cc) SL1 light from Home Assistant:
 on/off, brightness, colour temperature (2650–6000 K) and transitions, with
