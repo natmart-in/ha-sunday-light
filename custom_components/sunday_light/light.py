@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import logging
 from dataclasses import replace
 from typing import Any
 
@@ -20,10 +20,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import SundayConfigEntry
+from .api import SundayApiError
 from .const import DEFAULT_LERP_MS, DOMAIN, MAX_KELVIN, MIN_KELVIN
 from .coordinator import SundayCoordinator, SundayData
 from .models import LampState, SundayLampInfo
-from .soft_start import SOFT_START_SETTLE_S, plan_turn_on
+from .soft_start import async_run_turn_on, plan_turn_on
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -64,6 +67,7 @@ class SundayLightEntity(CoordinatorEntity[SundayCoordinator], LightEntity):
         super().__init__(coordinator)
         self._lamp_id = lamp_id
         self._attr_unique_id = lamp_id
+        self._command_seq = 0
 
     @property
     def _info(self) -> SundayLampInfo | None:
@@ -131,50 +135,47 @@ class SundayLightEntity(CoordinatorEntity[SundayCoordinator], LightEntity):
             else DEFAULT_LERP_MS
         )
 
+        # Every command bumps the counter; a turn-on still in its pauses
+        # stops if a newer command for this lamp has taken over.
+        self._command_seq += 1
+        seq = self._command_seq
+
         state = self._state
+        if state is None or not state.is_on:
+            # HA's view can be a poll old. Re-read before parking, so a lamp
+            # just turned on elsewhere isn't dipped to the start level.
+            state = await self._async_fresh_state() or state
         plan = plan_turn_on(
             is_on=state.is_on if state else None,
             target_brightness=brightness_api,
             saved_brightness=state.brightness if state else None,
             lerp_ms=lerp_ms,
         )
-        api = self.coordinator.api
-        if plan.pre_brightness is not None:
-            # Soft start: park a low level (and the colour) while still dark,
-            # so power-on doesn't jump straight to full power.
-            await api.async_update_lamp(
-                self._lamp_id,
-                brightness=plan.pre_brightness,
-                color_temp_k=kelvin,
-            )
-            await asyncio.sleep(SOFT_START_SETTLE_S)
-        # Power through the dedicated endpoint, then levels — the ordering
-        # rule the mobile app follows (the park above only sets the saved
-        # level while the lamp is dark).
-        if plan.power_on:
-            await api.async_set_power(self._lamp_id, True)
-        if plan.brightness is not None or (
-            kelvin is not None and plan.pre_brightness is None
-        ):
-            await api.async_update_lamp(
-                self._lamp_id,
-                brightness=plan.brightness,
-                color_temp_k=kelvin,
-                lerp_ms=plan.lerp_ms,
-            )
-        self._apply_optimistic(
-            is_on=True,
-            brightness=(
-                plan.brightness
-                if plan.brightness is not None
-                else plan.pre_brightness
-            ),
+        # Power goes through the dedicated endpoint before levels - the
+        # ordering rule the mobile app follows. The soft-start park before it
+        # only sets the saved level while the lamp is dark.
+        await async_run_turn_on(
+            self.coordinator.api,
+            self._lamp_id,
+            plan,
             color_temp_k=kelvin,
+            superseded=lambda: self._command_seq != seq,
+            on_progress=lambda brightness: self._apply_optimistic(
+                is_on=True, brightness=brightness, color_temp_k=kelvin
+            ),
         )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        self._command_seq += 1
         await self.coordinator.api.async_set_power(self._lamp_id, False)
         self._apply_optimistic(is_on=False)
+
+    async def _async_fresh_state(self) -> LampState | None:
+        try:
+            return await self.coordinator.api.async_get_lamp_state(self._lamp_id)
+        except SundayApiError as err:
+            _LOGGER.debug("Fresh state read for %s failed: %s", self._lamp_id, err)
+            return None
 
     @callback
     def _apply_optimistic(
