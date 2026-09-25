@@ -30,3 +30,4 @@ jobs:
         with:
           python-version: "3.13"
       - run: python tests/test_models.py
+      - run: python tests/test_soft_start.py

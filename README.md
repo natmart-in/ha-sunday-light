@@ -80,6 +80,10 @@ Each SL1 becomes one `light` entity supporting:
 | Colour temperature | 2650–6000 K |
 | Transition | any duration, default 0.25 s |
 
+Turning on from off uses a soft start: the light comes on at 5 % and fades up
+to the requested level over at least 2 s. Some lights can restart if they jump
+straight from dark to full power ([#2](https://github.com/natmart-in/ha-sunday-light/issues/2)).
+
 Lights that are offline (powered down at the wall, Wi-Fi lost) show as
 unavailable.
 
