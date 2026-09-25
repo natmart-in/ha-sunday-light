@@ -114,6 +114,23 @@ def test_brightness_clamping() -> None:
     assert models._as_brightness("0.5") is None
 
 
+def test_lamp_state_keeps_reported_power_and_level_separately() -> None:
+    state = models.parse_lamp_state(
+        {
+            "lamp_id": "L1",
+            "state": {
+                "desired": {"is_on": True, "brightness": 1.0},
+                "reported": {"is_on": False, "brightness": 0.05},
+            },
+        }
+    )
+    assert state.is_on is True  # desired-first, as before
+    assert state.reported_is_on is False
+    assert state.reported_brightness == 0.05
+    bare = models.parse_lamp_state({"lamp_id": "L2", "state": {"desired": {"is_on": True}}})
+    assert bare.reported_is_on is None and bare.reported_brightness is None
+
+
 def main() -> None:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:

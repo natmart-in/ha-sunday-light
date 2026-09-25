@@ -57,6 +57,10 @@ class LampState:
     color_temp_k: int | None
     online: bool
     display_state: str | None
+    # What the lamp itself last reported, without the desired-first merge
+    # above. None when the shadow has no reported value.
+    reported_is_on: bool | None = None
+    reported_brightness: float | None = None
 
 
 def _first(*values: Any) -> Any:
@@ -226,6 +230,10 @@ def parse_lamp_state(payload: Any) -> LampState | None:
         color_temp_k=color_temp_k,
         online=online,
         display_state=str(display_state) if display_state is not None else None,
+        reported_is_on=(
+            _as_bool(reported["is_on"]) if reported.get("is_on") is not None else None
+        ),
+        reported_brightness=_as_brightness(reported.get("brightness")),
     )
 
 
