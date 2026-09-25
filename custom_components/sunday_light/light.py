@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from typing import Any
 
@@ -22,6 +23,7 @@ from . import SundayConfigEntry
 from .const import DEFAULT_LERP_MS, DOMAIN, MAX_KELVIN, MIN_KELVIN
 from .coordinator import SundayCoordinator, SundayData
 from .models import LampState, SundayLampInfo
+from .soft_start import SOFT_START_SETTLE_S, plan_turn_on
 
 
 async def async_setup_entry(
@@ -130,19 +132,44 @@ class SundayLightEntity(CoordinatorEntity[SundayCoordinator], LightEntity):
         )
 
         state = self._state
-        # Power first through the dedicated endpoint, then levels — the
-        # ordering rule the mobile app follows.
-        if state is None or not state.is_on:
-            await self.coordinator.api.async_set_power(self._lamp_id, True)
-        if brightness_api is not None or kelvin is not None:
-            await self.coordinator.api.async_update_lamp(
+        plan = plan_turn_on(
+            is_on=state.is_on if state else None,
+            target_brightness=brightness_api,
+            saved_brightness=state.brightness if state else None,
+            lerp_ms=lerp_ms,
+        )
+        api = self.coordinator.api
+        if plan.pre_brightness is not None:
+            # Soft start: park a low level (and the colour) while still dark,
+            # so power-on doesn't jump straight to full power.
+            await api.async_update_lamp(
                 self._lamp_id,
-                brightness=brightness_api,
+                brightness=plan.pre_brightness,
                 color_temp_k=kelvin,
-                lerp_ms=lerp_ms,
+            )
+            await asyncio.sleep(SOFT_START_SETTLE_S)
+        # Power through the dedicated endpoint, then levels — the ordering
+        # rule the mobile app follows (the park above only sets the saved
+        # level while the lamp is dark).
+        if plan.power_on:
+            await api.async_set_power(self._lamp_id, True)
+        if plan.brightness is not None or (
+            kelvin is not None and plan.pre_brightness is None
+        ):
+            await api.async_update_lamp(
+                self._lamp_id,
+                brightness=plan.brightness,
+                color_temp_k=kelvin,
+                lerp_ms=plan.lerp_ms,
             )
         self._apply_optimistic(
-            is_on=True, brightness=brightness_api, color_temp_k=kelvin
+            is_on=True,
+            brightness=(
+                plan.brightness
+                if plan.brightness is not None
+                else plan.pre_brightness
+            ),
+            color_temp_k=kelvin,
         )
 
     async def async_turn_off(self, **kwargs: Any) -> None:

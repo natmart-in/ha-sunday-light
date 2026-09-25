@@ -29,7 +29,7 @@ ACTIONED_BY = "app"
 # Default fade duration for writes (ms), matching the app.
 DEFAULT_LERP_MS = 250
 
-USER_AGENT = "ha-sunday-light/0.1.0"
+USER_AGENT = "ha-sunday-light/0.1.1"
 
 CONF_REFRESH_TOKEN = "refresh_token"
 CONF_SCAN_INTERVAL = "scan_interval"
