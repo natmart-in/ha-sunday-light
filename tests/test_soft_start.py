@@ -21,10 +21,12 @@ sys.path.insert(
 )
 
 import soft_start  # noqa: E402
+from models import LampState  # noqa: E402
 from soft_start import (  # noqa: E402
+    SOFT_START_ACK_TIMEOUT_S,
     SOFT_START_BRIGHTNESS,
     SOFT_START_FADE_MS,
-    SOFT_START_SETTLE_S,
+    SOFT_START_POLL_S,
     TurnOnPlan,
     async_run_turn_on,
     plan_turn_on,
@@ -95,17 +97,43 @@ def test_already_on_without_target_changes_nothing() -> None:
     assert plan.brightness is None
 
 
-class FakeApi:
-    """Records calls in order; can fail on a named call."""
+class FakeLamp:
+    """A lamp behind its shadow, as the API sees it.
 
-    def __init__(self, fail_on: str | None = None) -> None:
+    Commands reach the lamp `lag` state reads later. Parking a level while it
+    is dark is kept as the saved level and triggers the firmware's repair,
+    which writes desired.is_on=false - with the level report by default, or
+    one read after it (`repair_after_report`), the worst ordering.
+    """
+
+    def __init__(
+        self,
+        *,
+        lag: int = 1,
+        park_ack: bool = True,
+        power_ack: bool = True,
+        repair_after_report: bool = False,
+        fail_on: str | None = None,
+        read_errors: int = 0,
+    ) -> None:
         self.calls: list[tuple] = []
+        self.reads = 0
+        self.lag = lag
+        self.park_ack = park_ack
+        self.power_ack = power_ack
+        self.repair_after_report = repair_after_report
         self.fail_on = fail_on
+        self.read_errors = read_errors
+        self.desired_on = False
+        self.reported_on = False
+        self.reported_brightness = 1.0
+        self._pending: list[list] = []
 
-    async def async_set_power(self, lamp_id: str, is_on: bool) -> None:
-        self.calls.append(("power", is_on))
-        if self.fail_on == "power":
-            raise RuntimeError("power failed")
+    def _later(self, reads: int, fn) -> None:
+        self._pending.append([reads, fn])
+
+    def _repair(self) -> None:
+        self.desired_on = False
 
     async def async_update_lamp(
         self,
@@ -118,6 +146,51 @@ class FakeApi:
         self.calls.append(("update", brightness, color_temp_k, lerp_ms))
         if self.fail_on == "update" and brightness != SOFT_START_BRIGHTNESS:
             raise RuntimeError("update failed")
+        if brightness is not None and not self.reported_on and self.park_ack:
+
+            def deliver() -> None:
+                self.reported_brightness = brightness
+                if self.repair_after_report:
+                    self._later(1, self._repair)
+                else:
+                    self._repair()
+
+            self._later(self.lag, deliver)
+
+    async def async_set_power(self, lamp_id: str, is_on: bool) -> None:
+        self.calls.append(("power", is_on))
+        if self.fail_on == "power":
+            raise RuntimeError("power failed")
+        self.desired_on = is_on
+        if self.power_ack:
+
+            def deliver() -> None:
+                if self.desired_on:
+                    self.reported_on = True
+
+            self._later(self.lag, deliver)
+
+    async def async_get_lamp_state(self, lamp_id: str) -> LampState:
+        self.reads += 1
+        for item in self._pending:
+            item[0] -= 1
+        due = [item for item in self._pending if item[0] <= 0]
+        self._pending = [item for item in self._pending if item[0] > 0]
+        for _, fn in due:
+            fn()
+        if self.read_errors:
+            self.read_errors -= 1
+            raise RuntimeError("read failed")
+        return LampState(
+            lamp_id=lamp_id,
+            is_on=self.desired_on,
+            brightness=self.reported_brightness,
+            color_temp_k=None,
+            online=True,
+            display_state="Online",
+            reported_is_on=self.reported_on,
+            reported_brightness=self.reported_brightness,
+        )
 
 
 def _run(plan, api, *, kelvin=None, superseded_after_sleeps=None):
@@ -126,9 +199,8 @@ def _run(plan, api, *, kelvin=None, superseded_after_sleeps=None):
 
     async def sleep(seconds: float) -> None:
         nonlocal sleeps
-        assert seconds == SOFT_START_SETTLE_S
+        assert seconds == SOFT_START_POLL_S
         sleeps += 1
-        api.calls.append(("sleep",))
 
     def superseded() -> bool:
         return (
@@ -149,91 +221,134 @@ def _run(plan, api, *, kelvin=None, superseded_after_sleeps=None):
     return progress
 
 
-def test_run_soft_start_orders_park_power_then_fade() -> None:
-    api = FakeApi()
-    plan = plan_turn_on(
+def _full_plan() -> TurnOnPlan:
+    return plan_turn_on(
         is_on=False, target_brightness=1.0, saved_brightness=1.0, lerp_ms=250
     )
-    progress = _run(plan, api, kelvin=3800)
-    assert api.calls == [
+
+
+def test_run_soft_start_orders_park_power_then_fade() -> None:
+    lamp = FakeLamp()
+    progress = _run(_full_plan(), lamp, kelvin=3800)
+    assert lamp.calls == [
         ("update", SOFT_START_BRIGHTNESS, 3800, 250),
-        ("sleep",),
         ("power", True),
-        ("sleep",),
         ("update", 1.0, 3800, SOFT_START_FADE_MS),
     ]
+    assert progress == [SOFT_START_BRIGHTNESS, 1.0]
+    assert lamp.desired_on and lamp.reported_on
+
+
+def test_run_waits_for_a_slow_lamp_to_confirm_the_park() -> None:
+    lamp = FakeLamp(lag=4)
+    _run(_full_plan(), lamp)
+    # Power-on only after the lamp reported the parked level (4 reads).
+    assert lamp.calls[1] == ("power", True)
+    assert lamp.calls.count(("power", True)) == 1
+    assert lamp.desired_on and lamp.reported_on
+
+
+def test_run_late_repair_is_undone_before_the_fade() -> None:
+    # Worst ordering: the repair lands after the level report, so after our
+    # power-on write. The lamp stays dark; power-on is re-sent once.
+    lamp = FakeLamp(lag=2, repair_after_report=True)
+    progress = _run(_full_plan(), lamp)
+    assert lamp.calls.count(("power", True)) == 2
+    assert lamp.calls[-1] == ("update", 1.0, None, SOFT_START_FADE_MS)
+    assert progress[-1] == 1.0
+    assert lamp.desired_on and lamp.reported_on
+
+
+def test_run_unconfirmed_park_still_powers_on() -> None:
+    lamp = FakeLamp(park_ack=False)
+    _run(_full_plan(), lamp)
+    assert ("power", True) in lamp.calls
+    assert lamp.reads >= round(SOFT_START_ACK_TIMEOUT_S / SOFT_START_POLL_S)
+
+
+def test_run_lamp_that_never_reports_on_is_not_faded_up() -> None:
+    lamp = FakeLamp(power_ack=False)
+    progress = _run(_full_plan(), lamp)
+    assert ("power", True) in lamp.calls
+    assert not any(c[0] == "update" and c[1] == 1.0 for c in lamp.calls)
+    assert progress == [SOFT_START_BRIGHTNESS]
+
+
+def test_run_read_errors_while_waiting_are_retried() -> None:
+    lamp = FakeLamp(read_errors=2)
+    progress = _run(_full_plan(), lamp)
     assert progress == [SOFT_START_BRIGHTNESS, 1.0]
 
 
 def test_run_low_target_has_no_fade_step() -> None:
-    api = FakeApi()
+    lamp = FakeLamp()
     plan = plan_turn_on(
         is_on=False, target_brightness=0.02, saved_brightness=1.0, lerp_ms=250
     )
-    progress = _run(plan, api)
-    assert api.calls == [("update", 0.02, None, 250), ("sleep",), ("power", True)]
+    progress = _run(plan, lamp)
+    assert lamp.calls == [("update", 0.02, None, 250), ("power", True)]
     assert progress == [0.02]
 
 
+def test_run_low_target_late_repair_keeps_lamp_on() -> None:
+    lamp = FakeLamp(lag=2, repair_after_report=True)
+    plan = plan_turn_on(
+        is_on=False, target_brightness=0.02, saved_brightness=1.0, lerp_ms=250
+    )
+    progress = _run(plan, lamp)
+    assert lamp.calls == [("update", 0.02, None, 250), ("power", True), ("power", True)]
+    assert progress == [0.02]
+    assert lamp.desired_on and lamp.reported_on
+
+
 def test_run_already_on_colour_only_is_one_update() -> None:
-    api = FakeApi()
+    lamp = FakeLamp()
     plan = plan_turn_on(
         is_on=True, target_brightness=None, saved_brightness=0.7, lerp_ms=500
     )
-    progress = _run(plan, api, kelvin=4000)
-    assert api.calls == [("update", None, 4000, 500)]
+    progress = _run(plan, lamp, kelvin=4000)
+    assert lamp.calls == [("update", None, 4000, 500)]
+    assert lamp.reads == 0
     assert progress == [None]
 
 
-def test_run_superseded_after_park_never_powers_on() -> None:
-    api = FakeApi()
-    plan = plan_turn_on(
-        is_on=False, target_brightness=1.0, saved_brightness=1.0, lerp_ms=250
-    )
-    progress = _run(plan, api, superseded_after_sleeps=1)
-    assert ("power", True) not in api.calls
+def test_run_superseded_while_parking_never_powers_on() -> None:
+    lamp = FakeLamp(lag=5)
+    progress = _run(_full_plan(), lamp, superseded_after_sleeps=1)
+    assert ("power", True) not in lamp.calls
     assert progress == []
 
 
-def test_run_superseded_after_power_on_skips_fade() -> None:
-    api = FakeApi()
-    plan = plan_turn_on(
-        is_on=False, target_brightness=1.0, saved_brightness=1.0, lerp_ms=250
-    )
-    progress = _run(plan, api, superseded_after_sleeps=2)
-    assert api.calls[-1] == ("sleep",)
-    assert ("power", True) in api.calls
+def test_run_superseded_while_powering_on_skips_fade() -> None:
+    lamp = FakeLamp(lag=2)
+    progress = _run(_full_plan(), lamp, superseded_after_sleeps=3)
+    assert ("power", True) in lamp.calls
+    assert not any(c[0] == "update" and c[1] == 1.0 for c in lamp.calls)
     assert progress == [SOFT_START_BRIGHTNESS]
 
 
 def test_run_failure_stops_and_raises() -> None:
-    api = FakeApi(fail_on="power")
-    plan = plan_turn_on(
-        is_on=False, target_brightness=1.0, saved_brightness=1.0, lerp_ms=250
-    )
+    lamp = FakeLamp(fail_on="power")
     try:
-        _run(plan, api)
+        _run(_full_plan(), lamp)
     except RuntimeError:
         pass
     else:
         raise AssertionError("expected the power failure to propagate")
-    assert api.calls[-1] == ("power", True)
-    assert not any(c[0] == "update" and c[1] == 1.0 for c in api.calls)
+    assert lamp.calls[-1] == ("power", True)
+    assert not any(c[0] == "update" and c[1] == 1.0 for c in lamp.calls)
 
 
 def test_run_fade_failure_leaves_lamp_at_start_level() -> None:
-    api = FakeApi(fail_on="update")
-    plan = plan_turn_on(
-        is_on=False, target_brightness=1.0, saved_brightness=1.0, lerp_ms=250
-    )
+    lamp = FakeLamp(fail_on="update")
     try:
-        _run(plan, api)
+        _run(_full_plan(), lamp)
     except RuntimeError:
         pass
     else:
         raise AssertionError("expected the fade-up failure to propagate")
-    assert ("power", True) in api.calls
-    assert api.calls[-1] == ("update", 1.0, None, SOFT_START_FADE_MS)
+    assert ("power", True) in lamp.calls
+    assert lamp.calls[-1] == ("update", 1.0, None, SOFT_START_FADE_MS)
 
 
 def main() -> None:
